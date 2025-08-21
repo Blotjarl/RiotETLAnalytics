@@ -33,7 +33,6 @@ function App() {
     axios.post('http://127.0.0.1:5000/api/run-etl')
       .then(response => {
         setEtlStatus('Refresh in progress. The bar below is an estimate. Please wait...');
-        // For a better user experience, we can re-enable the button after a set time
         setTimeout(() => {
           setIsEtlRunning(false);
           setEtlStatus('Refresh complete! Reload the page (Ctrl+R) to see new data.');
@@ -71,7 +70,7 @@ function App() {
       </header>
 
       <main>
-        {/* ... (The rest of your JSX) ... */}
+        {/* ... (The rest of the JSX) ... */}
         {loading && <p className="text-center">Loading data...</p>}
         {error && <p className="text-center text-red-500">Error fetching data.</p>}
 

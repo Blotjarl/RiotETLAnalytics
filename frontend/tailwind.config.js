@@ -6,7 +6,6 @@ export default {
   ],
   theme: {
     extend: {
-      // --- ADD THIS ---
       keyframes: {
         'progress': {
           '0%': { width: '0%' },
@@ -14,10 +13,8 @@ export default {
         }
       },
       animation: {
-        // This animation will take 3 minutes (180s) to complete
         'progress': 'progress 360s linear forwards',
       }
-      // --- END ADD ---
     },
   },
   plugins: [],

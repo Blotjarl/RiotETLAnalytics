@@ -57,7 +57,6 @@ def get_match_ids_by_puuid(puuid, count=20):
     # The Match API also uses the continental routing value
     url = f"https://{ROUTING_REGION}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
 
-    # We can add parameters to the request, like the number of matches to fetch
     params = {
         "start": 0,
         "count": count,
@@ -71,9 +70,8 @@ def get_match_ids_by_puuid(puuid, count=20):
     except requests.exceptions.RequestException:
         return None
 
-# This block allows us to test the functions directly
 if __name__ == "__main__":
-    # --- Step 1: Get Challenger Players ---
+    # Step 1: Get Challenger Players
     challengers = get_challenger_players()
     if not challengers:
         print("Could not fetch challenger list. Exiting.")
@@ -81,7 +79,7 @@ if __name__ == "__main__":
 
     sorted_challengers = sorted(challengers, key=lambda x: x['leaguePoints'], reverse=True)
 
-    # --- Step 2: Get Unique Match IDs ---
+    # Step 2: Get Unique Match IDs
     all_match_ids = set()
     players_to_check = sorted_challengers[:100]
 
@@ -94,7 +92,7 @@ if __name__ == "__main__":
 
     print(f"\nFound a total of {len(all_match_ids)} unique match IDs.")
 
-    # --- Step 3: Get Detailed Data for Each Match ---
+    # Step 3: Get Detailed Data for Each Match
     match_data_list = []
     # We only need the first 1000 unique matches
     unique_matches_to_fetch = list(all_match_ids)[:1000]
@@ -118,7 +116,3 @@ if __name__ == "__main__":
     with open('raw_matches.json', 'w') as f:
         json.dump(match_data_list, f)
     print("Saved raw match data to 'raw_matches.json'")
-
-    # You can uncomment the line below to inspect the data of the first match
-    # import json
-    # print(json.dumps(match_data_list[0], indent=2))
