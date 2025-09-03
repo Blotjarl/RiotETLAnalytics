@@ -1,93 +1,48 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, NavLink } from 'react-router-dom';
+import ChampionStatsPage from './ChampionStatsPage';
+import PlayerStatsPage from './PlayerStatsPage';
 
 function App() {
-  const [championStats, setChampionStats] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [etlStatus, setEtlStatus] = useState('');
-  const [isEtlRunning, setIsEtlRunning] = useState(false);
-
-  const fetchData = () => {
-    setLoading(true);
-    axios.get('http://127.0.0.1:5000/api/champion-stats')
-      .then(response => {
-        setChampionStats(response.data);
-        setLoading(false);
-      })
-      .catch(error => {
-        console.error("There was an error fetching the data!", error);
-        setError(error);
-        setLoading(false);
-      });
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const handleRunEtl = () => {
-    setIsEtlRunning(true);
-    setEtlStatus('Starting data refresh...');
-
-    axios.post('http://127.0.0.1:5000/api/run-etl')
-      .then(response => {
-        setEtlStatus('Refresh in progress. The bar below is an estimate. Please wait...');
-        setTimeout(() => {
-          setIsEtlRunning(false);
-          setEtlStatus('Refresh complete! Reload the page (Ctrl+R) to see new data.');
-        }, 360000); // 6 minutes
-      })
-      .catch(error => {
-        setEtlStatus('Failed to start data refresh. Please try again.');
-        setIsEtlRunning(false);
-      });
+  const activeLinkStyle = {
+    color: '#22d3ee', // Tailwind's cyan-400 color
+    borderBottom: '2px solid #22d3ee'
   };
 
   return (
-    <div className="bg-gray-900 text-white min-h-screen p-8 font-sans">
-      <header className="text-center mb-10">
-        <h1 className="text-4xl font-bold">League of Legends - Challenger Stats</h1>
-        <p className="text-gray-400">Match Data Analytics Platform (2025)</p>
+    <Router>
+      <div className="bg-gray-900 text-white min-h-screen font-sans">
+        <header className="text-center p-8 border-b border-gray-700">
+          <h1 className="text-4xl font-bold">League of Legends - Challenger Stats</h1>
+          <p className="text-gray-400 mt-2">Match Data Analytics Platform (2025)</p>
+          
+          {/* --- NAVIGATION MENU --- */}
+          <nav className="flex justify-center gap-8 mt-6">
+            <NavLink 
+              to="/" 
+              className="text-lg pb-1 border-b-2 border-transparent hover:text-cyan-400 transition-colors"
+              style={({ isActive }) => isActive ? activeLinkStyle : undefined}
+            >
+              Champion Stats
+            </NavLink>
+            <NavLink 
+              to="/players" 
+              className="text-lg pb-1 border-b-2 border-transparent hover:text-cyan-400 transition-colors"
+              style={({ isActive }) => isActive ? activeLinkStyle : undefined}
+            >
+              Player Stats
+            </NavLink>
+          </nav>
+        </header>
 
-        <div className="mt-6 max-w-md mx-auto">
-          <button 
-            onClick={handleRunEtl}
-            disabled={isEtlRunning}
-            className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-4 rounded w-full disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors"
-          >
-            {isEtlRunning ? 'Refresh in Progress...' : 'Refresh Latest Match Data'}
-          </button>
-          {etlStatus && <p className="text-sm text-gray-400 mt-2 h-4">{etlStatus}</p>}
-
-          {/* --- NEW LOADING BAR --- */}
-          {isEtlRunning && (
-            <div className="w-full bg-gray-700 rounded-full h-2.5 mt-2 overflow-hidden">
-              <div className="bg-cyan-400 h-2.5 rounded-full animate-progress"></div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      <main>
-        {/* ... (The rest of the JSX) ... */}
-        {loading && <p className="text-center">Loading data...</p>}
-        {error && <p className="text-center text-red-500">Error fetching data.</p>}
-
-        <section>
-          <h2 className="text-3xl font-semibold mb-6 border-l-4 border-cyan-400 pl-4">Champion Stats</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {championStats.map(champion => (
-              <div key={champion.championName} className="bg-gray-800 p-4 rounded-lg shadow-lg">
-                <h3 className="text-xl font-bold text-cyan-400">{champion.championName}</h3>
-                <p>Win Rate: <span className="font-semibold">{parseFloat(champion.winRate).toFixed(2)}%</span></p>
-                <p>Games Played: <span className="font-semibold">{champion.playCount}</span></p>
-              </div>
-            ))}
-          </div>
-        </section>
-      </main>
-    </div>
+        <main>
+          <Routes>
+            <Route path="/" element={<ChampionStatsPage />} />
+            <Route path="/players" element={<PlayerStatsPage />} />
+          </Routes>
+        </main>
+      </div>
+    </Router>
   );
 }
 
