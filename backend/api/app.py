@@ -1,37 +1,54 @@
 import os
 import sys
-import threading # Import the threading library
+import threading
 from flask import Flask, jsonify
 from flask_cors import CORS
 
-# This allows the script to import from the 'etl' folder
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from etl.db_loader import get_db_connection
-from etl.main import run_etl_pipeline # Import your main ETL function
+from etl.main import run_etl_pipeline, run_player_leaderboard_update
 
 app = Flask(__name__)
 CORS(app)
 
-# --- NEW: Endpoint to trigger the ETL process ---
 @app.route('/api/run-etl', methods=['POST'])
 def start_etl():
-    """
-    Triggers the ETL pipeline in a background thread.
-    """
-    # Running the ETL in a thread prevents the API from timing out,
-    # as the process takes several minutes.
+    """Triggers the MATCH HISTORY ETL pipeline in a background thread."""
     thread = threading.Thread(target=run_etl_pipeline)
     thread.start()
-    
-    return jsonify({"message": "ETL process started successfully in the background."}), 202
+    return jsonify({"message": "Match history ETL process started successfully."}), 202
 
-# --- Your existing data endpoints ---
-@app.route('/api/champion-stats', methods=['GET'])
-def get_champion_stats():
-    # ... (this function remains unchanged)
+@app.route('/api/run-player-update', methods=['POST'])
+def start_player_update():
+    """Triggers the PLAYER LEADERBOARD update pipeline in a background thread."""
+    thread = threading.Thread(target=run_player_leaderboard_update)
+    thread.start()
+    return jsonify({"message": "Player leaderboard update started successfully."}), 202
+
+@app.route('/api/players', methods=['GET'])
+def get_players():
+    """Fetches the current top 100 players from the database."""
     conn = get_db_connection()
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
+    
+    cursor = conn.cursor(dictionary=True)
+    # Order by the rank we assigned to ensure the list is sorted correctly
+    query = "SELECT * FROM players ORDER BY leaderboardRank ASC"
+    
+    cursor.execute(query)
+    players = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(players)
+
+@app.route('/api/champion-stats', methods=['GET'])
+def get_champion_stats():
+    """Fetches aggregate champion statistics."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    
     cursor = conn.cursor(dictionary=True)
     query = """
     SELECT
@@ -52,4 +69,3 @@ def get_champion_stats():
     conn.close()
     return jsonify(champion_stats)
 
-# Add your get_player_stats function here if you are using it

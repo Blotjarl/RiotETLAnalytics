@@ -19,3 +19,21 @@ CREATE TABLE IF NOT EXISTS participant_stats (
     -- A unique key to prevent duplicate entries for the same player in the same match
     PRIMARY KEY (matchId, puuid)
 );
+
+-- Create the new table with the columns provided by the API
+CREATE TABLE IF NOT EXISTS players (
+    puuid VARCHAR(100) NOT NULL,
+    leaderboardRank INT,
+    leaguePoints INT,
+    `rank` VARCHAR(10), -- The tier rank, e.g., "I"
+    wins INT,
+    losses INT,
+    veteran BOOLEAN,
+    inactive BOOLEAN,
+    freshBlood BOOLEAN,
+    hotStreak BOOLEAN,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (puuid)
+);
+
+
