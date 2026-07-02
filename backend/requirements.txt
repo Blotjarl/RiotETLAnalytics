@@ -1,5 +1,3 @@
 requests
-mysql-connector-python
+psycopg2-binary
 python-dotenv
-Flask
-Flask-Cors

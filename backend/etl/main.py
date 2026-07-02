@@ -1,70 +1,103 @@
-from .riot_api import get_top_100_player_data, get_match_ids_by_puuid, get_match_data_by_id
+import sys
+
+from .riot_api import get_top_apex_player_data, get_match_ids_by_puuid, get_match_data_by_id
 from .data_transformer import transform_raw_match_data
-from .db_loader import load_data_to_db, load_player_data_to_db, get_puuids_from_db
+from .db_loader import (
+    load_data_to_db,
+    load_player_data_to_db,
+    load_matches_to_db,
+    get_puuids_to_crawl,
+    mark_puuids_crawled,
+    get_existing_match_ids,
+    refresh_champion_stats_by_tier,
+)
+
+# How much of the player pool to crawl match history for in a single run, and
+# how many recent matches to pull per player. Tuned to comfortably fit within
+# Riot's default rate limit (20 req/1s, 100 req/2min) inside a single GitHub
+# Actions job, even before match-id dedup kicks in. Since the pool is
+# ~1,500-3,000 apex players, a rotating slice of 500/day gives full coverage
+# every few days while new matches accumulate daily.
+PLAYERS_TO_CRAWL_PER_RUN = 500
+MATCHES_PER_PLAYER = 20
+
 
 def run_player_leaderboard_update():
-    """
-    Runs the pipeline to fetch and store the top 100 players.
-    """
+    """Fetches and stores the current Challenger + Grandmaster + Master leaderboard."""
     print("\n--- Starting Player Leaderboard Update Pipeline ---")
-    player_data = get_top_100_player_data()
+    player_data = get_top_apex_player_data()
     load_player_data_to_db(player_data)
     print("\n--- Player Leaderboard Update Finished. ---")
 
+
 def run_etl_pipeline():
     """
-    Runs the full ETL pipeline for match data using PUUIDs from our database.
+    Runs the incremental match history ETL: crawls a rotating slice of the
+    player pool, fetches only match IDs we don't already have, loads them,
+    and rebuilds the champion_stats_by_tier insight table.
+
+    Returns True on success, False if the load step failed. On failure, the
+    rotation state is deliberately NOT advanced (mark_puuids_crawled is
+    skipped) and the insight table is NOT rebuilt from an incomplete load,
+    since neither would be safe to do on top of data that didn't actually
+    get persisted.
     """
     print("\n--- Starting Match History ETL Pipeline ---")
-    
+
     # --- 1. EXTRACT ---
     print("--- Phase: EXTRACT ---")
-    
-    # Get PUUIDs of the top players we just stored in the database.
-    # We limit this to a small number to avoid making thousands of API calls during testing.
-    # You can increase this limit later.
-    player_puuids = get_puuids_from_db(limit=20) 
-    if not player_puuids:
-        print("ETL Aborted: Could not fetch PUUIDs from the database.")
-        return
 
-    # Get a unique set of recent match IDs from these players
+    player_puuids = get_puuids_to_crawl(limit=PLAYERS_TO_CRAWL_PER_RUN)
+    if not player_puuids:
+        print("ETL Aborted: No PUUIDs available to crawl (has the leaderboard update run yet?).")
+        return True
+
     all_match_ids = set()
-    print(f"Fetching match histories for top {len(player_puuids)} players...")
+    print(f"Fetching match histories for {len(player_puuids)} players...")
     for puuid in player_puuids:
-        # Fetch the last 10 match IDs for each player
-        match_ids = get_match_ids_by_puuid(puuid, count=10)
+        match_ids = get_match_ids_by_puuid(puuid, count=MATCHES_PER_PLAYER)
         if match_ids:
             all_match_ids.update(match_ids)
-    
-    # Fetch detailed data for each unique match
-    raw_match_data = []
-    unique_matches_to_fetch = list(all_match_ids)
 
-    print(f"Found {len(unique_matches_to_fetch)} unique matches. Fetching detailed data...")
-    for i, match_id in enumerate(unique_matches_to_fetch):
-        # Print progress to the console
+    already_stored = get_existing_match_ids(all_match_ids)
+    new_match_ids = list(all_match_ids - already_stored)
+    print(
+        f"Found {len(all_match_ids)} unique matches across crawled players "
+        f"({len(already_stored)} already stored, {len(new_match_ids)} new)."
+    )
+
+    raw_match_data = []
+    for i, match_id in enumerate(new_match_ids):
         if (i + 1) % 25 == 0:
-            print(f"  ...progress: {i + 1}/{len(unique_matches_to_fetch)}")
-            
+            print(f"  ...progress: {i + 1}/{len(new_match_ids)}")
         match_data = get_match_data_by_id(match_id)
         if match_data:
             raw_match_data.append(match_data)
 
-    print(f"Extraction complete. Found data for {len(raw_match_data)} matches.")
+    print(f"Extraction complete. Fetched detail for {len(raw_match_data)} new matches.")
 
     # --- 2. TRANSFORM ---
     print("\n--- Phase: TRANSFORM ---")
-    transformed_data = transform_raw_match_data(raw_match_data)
-    
+    matches, participant_stats = transform_raw_match_data(raw_match_data)
+
     # --- 3. LOAD ---
     print("\n--- Phase: LOAD ---")
-    load_data_to_db(transformed_data)
+    if not load_matches_to_db(matches) or not load_data_to_db(participant_stats):
+        print(
+            "\n--- Match History ETL Pipeline FAILED during LOAD. "
+            "Skipping crawl-state update and insight refresh so a partial "
+            "load isn't treated as a completed crawl. ---"
+        )
+        return False
+
+    mark_puuids_crawled(player_puuids)
+    refresh_champion_stats_by_tier()
 
     print("\n--- Match History ETL Pipeline Finished. ---")
+    return True
+
 
 if __name__ == "__main__":
-    # Now, when we run this script, it will execute BOTH pipelines in order.
     run_player_leaderboard_update()
-    run_etl_pipeline()
-
+    if not run_etl_pipeline():
+        sys.exit(1)
