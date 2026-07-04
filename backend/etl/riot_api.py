@@ -5,7 +5,11 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-RIOT_API_KEY = os.getenv("RIOT_API_KEY")
+# .strip() guards against a trailing newline/whitespace in the secret value
+# (e.g. from copy-pasting), which `requests` rejects as an invalid header.
+RIOT_API_KEY = os.getenv("RIOT_API_KEY", "").strip()
+if not RIOT_API_KEY:
+    print("Warning: RIOT_API_KEY is not set.")
 
 PLATFORM_REGION = "na1"
 ROUTING_REGION = "americas"

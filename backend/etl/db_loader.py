@@ -5,8 +5,12 @@ from psycopg2 import Error
 
 def get_db_connection():
     """Establishes a connection to the Postgres database."""
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        print("Error connecting to Postgres database: DATABASE_URL environment variable is not set.")
+        return None
     try:
-        return psycopg2.connect(os.getenv("DATABASE_URL"))
+        return psycopg2.connect(database_url)
     except Error as e:
         print(f"Error connecting to Postgres database: {e}")
         return None
