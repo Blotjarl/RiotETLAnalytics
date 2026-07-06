@@ -150,10 +150,19 @@ def get_top_apex_player_data():
     return processed_player_data
 
 
+RANKED_SOLO_DUO_QUEUE_ID = 420
+
+
 def get_match_ids_by_puuid(puuid, count=20):
-    """Fetches a list of recent match IDs for a given PUUID."""
+    """
+    Fetches a list of recent Ranked Solo/Duo match IDs for a given PUUID.
+    Filtered to queue 420 so champion_stats_by_tier reflects the apex-tier
+    ranked meta, not a blend with whatever ARAM/normals/Arena games these
+    players happened to have in their recent history.
+    """
     url = f"https://{ROUTING_REGION}.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids"
-    return _get(url, params={"start": 0, "count": count}) or []
+    params = {"start": 0, "count": count, "queue": RANKED_SOLO_DUO_QUEUE_ID}
+    return _get(url, params=params) or []
 
 
 def get_match_data_by_id(match_id):
