@@ -244,6 +244,31 @@ def load_data_to_db(participant_data_list):
         connection.close()
 
 
+def prune_old_matches(retention_days):
+    """
+    Deletes matches older than retention_days (and their participant_stats
+    rows, via ON DELETE CASCADE), so the database doesn't grow forever.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM matches WHERE gamecreation < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
+            deleted = cursor.rowcount
+        connection.commit()
+        print(f"Pruned {deleted} matches older than {retention_days} days.")
+    except Error as e:
+        print(f"Error pruning old matches: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
 def refresh_champion_stats_by_tier():
     """Rebuilds the champion_stats_by_tier insight table from raw match data."""
     connection = get_db_connection()

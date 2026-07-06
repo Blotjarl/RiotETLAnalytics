@@ -10,6 +10,7 @@ from .db_loader import (
     mark_puuids_crawled,
     get_existing_match_ids,
     refresh_champion_stats_by_tier,
+    prune_old_matches,
 )
 
 # How much of the player pool to crawl match history for in a single run, and
@@ -20,6 +21,11 @@ from .db_loader import (
 # every few days while new matches accumulate daily.
 PLAYERS_TO_CRAWL_PER_RUN = 500
 MATCHES_PER_PLAYER = 20
+
+# How long to keep match data before it's pruned, to keep the database from
+# growing forever. Lower to 90 if 180 turns out to be too much for the free
+# Supabase storage tier.
+MATCH_RETENTION_DAYS = 180
 
 
 def run_player_leaderboard_update():
@@ -91,6 +97,7 @@ def run_etl_pipeline():
         return False
 
     mark_puuids_crawled(player_puuids)
+    prune_old_matches(retention_days=MATCH_RETENTION_DAYS)
     refresh_champion_stats_by_tier()
 
     print("\n--- Match History ETL Pipeline Finished. ---")

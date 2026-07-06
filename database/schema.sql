@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS matches (
     PRIMARY KEY (matchid)
 );
 
+-- Supports the daily retention prune (DELETE ... WHERE gamecreation < ...)
+CREATE INDEX IF NOT EXISTS idx_matches_gamecreation ON matches (gamecreation);
+
 -- ============================================================
 -- participant_stats: one row per player per match
 -- ============================================================
