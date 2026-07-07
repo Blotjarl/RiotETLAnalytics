@@ -50,6 +50,24 @@ def transform_raw_match_data(raw_match_data_list):
                 "kills": p_data.get("kills"),
                 "deaths": p_data.get("deaths"),
                 "assists": p_data.get("assists"),
+                # teamPosition can come back as "" (not just missing) on some
+                # remakes/edge cases even in ranked solo/duo; normalize to NULL.
+                "teamPosition": p_data.get("teamPosition") or None,
+                "teamId": p_data.get("teamId"),
+                "item0": p_data.get("item0"),
+                "item1": p_data.get("item1"),
+                "item2": p_data.get("item2"),
+                "item3": p_data.get("item3"),
+                "item4": p_data.get("item4"),
+                "item5": p_data.get("item5"),
+                "item6": p_data.get("item6"),
+                "summoner1Id": p_data.get("summoner1Id"),
+                "summoner2Id": p_data.get("summoner2Id"),
+                "goldEarned": p_data.get("goldEarned"),
+                "totalMinionsKilled": p_data.get("totalMinionsKilled"),
+                "visionScore": p_data.get("visionScore"),
+                "totalDamageDealtToChampions": p_data.get("totalDamageDealtToChampions"),
+                "perks": p_data.get("perks"),
             })
 
     print("Transformation complete.")

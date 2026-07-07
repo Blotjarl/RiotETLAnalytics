@@ -10,6 +10,8 @@ from .db_loader import (
     mark_puuids_crawled,
     get_existing_match_ids,
     refresh_champion_stats_by_tier,
+    refresh_champion_stats_by_patch,
+    record_lp_history,
     prune_old_matches,
 )
 
@@ -33,6 +35,7 @@ def run_player_leaderboard_update():
     print("\n--- Starting Player Leaderboard Update Pipeline ---")
     player_data = get_top_apex_player_data()
     load_player_data_to_db(player_data)
+    record_lp_history(player_data)
     print("\n--- Player Leaderboard Update Finished. ---")
 
 
@@ -99,6 +102,7 @@ def run_etl_pipeline():
     mark_puuids_crawled(player_puuids)
     prune_old_matches(retention_days=MATCH_RETENTION_DAYS)
     refresh_champion_stats_by_tier()
+    refresh_champion_stats_by_patch()
 
     print("\n--- Match History ETL Pipeline Finished. ---")
     return True

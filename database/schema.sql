@@ -110,3 +110,104 @@ CREATE POLICY "Public read access" ON champion_stats_by_tier FOR SELECT USING (t
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT SELECT ON players, matches, participant_stats, champion_stats_by_tier TO anon, authenticated;
+
+-- ============================================================
+-- Phase 1: enrich participant_stats with per-participant detail
+-- needed for per-role breakdowns, item/build insights, and
+-- team-comp / item-conditioned win-probability models later.
+-- ============================================================
+ALTER TABLE participant_stats
+    ADD COLUMN IF NOT EXISTS teamposition VARCHAR(10),   -- TOP/JUNGLE/MIDDLE/BOTTOM/UTILITY; NULL if Riot didn't assign one (seen as "" on remakes/edge cases even in ranked solo/duo)
+    ADD COLUMN IF NOT EXISTS teamid INT,                 -- 100 or 200
+    ADD COLUMN IF NOT EXISTS item0 INT,
+    ADD COLUMN IF NOT EXISTS item1 INT,
+    ADD COLUMN IF NOT EXISTS item2 INT,
+    ADD COLUMN IF NOT EXISTS item3 INT,
+    ADD COLUMN IF NOT EXISTS item4 INT,
+    ADD COLUMN IF NOT EXISTS item5 INT,
+    ADD COLUMN IF NOT EXISTS item6 INT,                  -- trinket slot
+    ADD COLUMN IF NOT EXISTS summoner1id INT,
+    ADD COLUMN IF NOT EXISTS summoner2id INT,
+    ADD COLUMN IF NOT EXISTS goldearned INT,
+    ADD COLUMN IF NOT EXISTS totalminionskilled INT,
+    ADD COLUMN IF NOT EXISTS visionscore INT,
+    ADD COLUMN IF NOT EXISTS totaldamagedealttochampions INT,
+    ADD COLUMN IF NOT EXISTS perks JSONB;                -- raw {statPerks, styles} blob, intentionally unnormalized until a concrete rune insight needs one
+
+-- ============================================================
+-- Phase 1: derive `patch` (e.g. "14.14") from gameversion so it can
+-- be grouped/filtered/indexed without recomputing it in every query
+-- (site, future ML, and Tableau all need this). substring() with a
+-- static POSIX pattern is IMMUTABLE, which STORED generated columns
+-- require; returns NULL (not an error) if gameversion is NULL or
+-- doesn't match, so this is safe against unexpected formats.
+-- ============================================================
+ALTER TABLE matches
+    ADD COLUMN IF NOT EXISTS patch VARCHAR(10) GENERATED ALWAYS AS (substring(gameversion from '^\d+\.\d+')) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_matches_patch ON matches (patch);
+
+-- ============================================================
+-- champion_stats_by_patch: insert-only meta history, refreshed via
+-- UPSERT (never TRUNCATEd) after each ETL run. Unlike
+-- champion_stats_by_tier, a patch's row here keeps its last-computed
+-- values once every match for that patch has aged out of the
+-- MATCH_RETENTION_DAYS window (the join in refresh_champion_stats_by_patch
+-- simply stops producing rows for it). Note the row's counts will
+-- visibly shrink for the last few days of a patch's retention window
+-- as its matches prune out day by day, before finally freezing --
+-- this is expected, not a bug.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS champion_stats_by_patch (
+    patch VARCHAR(10) NOT NULL,
+    tier VARCHAR(20) NOT NULL,
+    championname VARCHAR(50) NOT NULL,
+    playcount INT NOT NULL,
+    wincount INT NOT NULL,
+    winrate NUMERIC(5, 2) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (patch, tier, championname)
+);
+
+CREATE INDEX IF NOT EXISTS idx_champion_stats_by_patch_championname ON champion_stats_by_patch (championname);
+
+-- ============================================================
+-- player_lp_history: one append-only snapshot row per player per
+-- day, training substrate for a future promotion-likelihood model.
+-- No FK to players -- must survive a player being deleted from
+-- players when they fall off the leaderboard. recorded_date is a
+-- plain DEFAULT column (not GENERATED -- a timestamptz::date cast
+-- depends on the session TimeZone setting and is only STABLE, not
+-- IMMUTABLE, so Postgres would reject it as a generated column) used
+-- to dedupe same-day snapshots if the leaderboard job is ever
+-- triggered twice in one UTC day. No retention prune, intentionally:
+-- ~11,000 rows/day of a handful of small columns is cheap, and this
+-- table IS the historical record the model needs -- it should
+-- outlive the 180-day raw-match retention horizon.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS player_lp_history (
+    id BIGSERIAL PRIMARY KEY,
+    puuid VARCHAR(100) NOT NULL,
+    tier VARCHAR(20) NOT NULL,
+    "rank" VARCHAR(10),
+    leaguepoints INT,
+    wins INT,
+    losses INT,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recorded_date DATE NOT NULL DEFAULT ((now() AT TIME ZONE 'utc')::date)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_player_lp_history_puuid_recorded_date ON player_lp_history (puuid, recorded_date);
+CREATE INDEX IF NOT EXISTS idx_player_lp_history_puuid ON player_lp_history (puuid);
+
+-- ============================================================
+-- RLS + grants for the two new tables, same public-read pattern as
+-- every other table above (crawl_state is still the only exception).
+-- ============================================================
+ALTER TABLE champion_stats_by_patch ENABLE ROW LEVEL SECURITY;
+ALTER TABLE player_lp_history ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read access" ON champion_stats_by_patch FOR SELECT USING (true);
+CREATE POLICY "Public read access" ON player_lp_history FOR SELECT USING (true);
+
+GRANT SELECT ON champion_stats_by_patch, player_lp_history TO anon, authenticated;

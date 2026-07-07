@@ -1,6 +1,7 @@
 import os
 import psycopg2
 from psycopg2 import Error
+from psycopg2.extras import Json
 
 
 def get_db_connection():
@@ -172,6 +173,40 @@ def load_player_data_to_db(player_data_list):
         connection.close()
 
 
+def record_lp_history(player_data_list):
+    """
+    Appends one row per player to player_lp_history for today (UTC). Skips a
+    player already recorded today (ON CONFLICT on the puuid+recorded_date
+    unique index) so a manual re-trigger of the leaderboard update doesn't
+    create duplicate same-day snapshots. Never updates existing rows --
+    intentionally append-only training substrate for a future promotion-
+    likelihood model.
+    """
+    if not player_data_list:
+        return
+
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    INSERT INTO player_lp_history (puuid, tier, "rank", leaguepoints, wins, losses)
+    VALUES (%(puuid)s, %(tier)s, %(rank)s, %(leaguePoints)s, %(wins)s, %(losses)s)
+    ON CONFLICT (puuid, recorded_date) DO NOTHING;
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.executemany(sql, player_data_list)
+        connection.commit()
+        print(f"Recorded LP history snapshot for {len(player_data_list)} players.")
+    except Error as e:
+        print(f"Error recording player_lp_history: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
 def load_matches_to_db(match_list):
     """
     Upserts match-level metadata (one row per match).
@@ -223,16 +258,46 @@ def load_data_to_db(participant_data_list):
 
     sql = """
     INSERT INTO participant_stats
-        (matchid, puuid, riotidgamename, riotidtagline, championname, win, kills, deaths, assists)
+        (matchid, puuid, riotidgamename, riotidtagline, championname, win, kills, deaths, assists,
+         teamposition, teamid, item0, item1, item2, item3, item4, item5, item6,
+         summoner1id, summoner2id, goldearned, totalminionskilled, visionscore,
+         totaldamagedealttochampions, perks)
     VALUES
-        (%(matchId)s, %(puuid)s, %(riotIdGameName)s, %(riotIdTagline)s, %(championName)s, %(win)s, %(kills)s, %(deaths)s, %(assists)s)
+        (%(matchId)s, %(puuid)s, %(riotIdGameName)s, %(riotIdTagline)s, %(championName)s, %(win)s, %(kills)s, %(deaths)s, %(assists)s,
+         %(teamPosition)s, %(teamId)s, %(item0)s, %(item1)s, %(item2)s, %(item3)s, %(item4)s, %(item5)s, %(item6)s,
+         %(summoner1Id)s, %(summoner2Id)s, %(goldEarned)s, %(totalMinionsKilled)s, %(visionScore)s,
+         %(totalDamageDealtToChampions)s, %(perks)s)
     ON CONFLICT (matchid, puuid) DO UPDATE SET
-        kills = EXCLUDED.kills, deaths = EXCLUDED.deaths, assists = EXCLUDED.assists;
+        kills = EXCLUDED.kills,
+        deaths = EXCLUDED.deaths,
+        assists = EXCLUDED.assists,
+        teamposition = EXCLUDED.teamposition,
+        teamid = EXCLUDED.teamid,
+        item0 = EXCLUDED.item0,
+        item1 = EXCLUDED.item1,
+        item2 = EXCLUDED.item2,
+        item3 = EXCLUDED.item3,
+        item4 = EXCLUDED.item4,
+        item5 = EXCLUDED.item5,
+        item6 = EXCLUDED.item6,
+        summoner1id = EXCLUDED.summoner1id,
+        summoner2id = EXCLUDED.summoner2id,
+        goldearned = EXCLUDED.goldearned,
+        totalminionskilled = EXCLUDED.totalminionskilled,
+        visionscore = EXCLUDED.visionscore,
+        totaldamagedealttochampions = EXCLUDED.totaldamagedealttochampions,
+        perks = EXCLUDED.perks;
     """
 
     try:
         with connection.cursor() as cursor:
-            cursor.executemany(sql, participant_data_list)
+            # perks is a nested dict; psycopg2 needs it wrapped as Json to
+            # adapt correctly into a JSONB column.
+            rows = [
+                {**row, "perks": Json(row["perks"]) if row.get("perks") is not None else None}
+                for row in participant_data_list
+            ]
+            cursor.executemany(sql, rows)
         connection.commit()
         print(f"Successfully loaded or updated {len(participant_data_list)} participant stats records.")
         return True
@@ -297,5 +362,85 @@ def refresh_champion_stats_by_tier():
     except Error as e:
         print(f"Error refreshing champion_stats_by_tier: {e}")
         connection.rollback()
+    finally:
+        connection.close()
+
+
+def refresh_champion_stats_by_patch():
+    """
+    Upserts the champion_stats_by_patch history table from current raw match
+    data. Unlike champion_stats_by_tier this is never truncated: once every
+    matches row for a given patch ages out of the retention prune, the join
+    below stops producing rows for that patch and its history row simply
+    stops being touched, freezing as a permanent record of that patch's meta.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    INSERT INTO champion_stats_by_patch (patch, tier, championname, playcount, wincount, winrate, updated_at)
+    SELECT
+        m.patch,
+        p.tier,
+        ps.championname,
+        COUNT(*) AS play_count,
+        SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS win_count,
+        ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS win_rate,
+        now()
+    FROM participant_stats ps
+    JOIN matches m ON m.matchid = ps.matchid
+    JOIN players p ON p.puuid = ps.puuid
+    WHERE m.patch IS NOT NULL
+    GROUP BY m.patch, p.tier, ps.championname
+    ON CONFLICT (patch, tier, championname) DO UPDATE SET
+        playcount = EXCLUDED.playcount,
+        wincount = EXCLUDED.wincount,
+        winrate = EXCLUDED.winrate,
+        updated_at = now();
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+        connection.commit()
+        print("Refreshed champion_stats_by_patch.")
+    except Error as e:
+        print(f"Error refreshing champion_stats_by_patch: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
+def get_match_ids_missing_rich_fields(limit=8000):
+    """
+    Returns matchids whose participant_stats rows predate the Phase 1
+    rich-field columns. goldEarned is never null in a real match-v5 response,
+    so a null goldearned here reliably means "not yet backfilled". Used by
+    the one-off backfill script; naturally resumable since each call returns
+    the next not-yet-backfilled slice once earlier ones are loaded.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return []
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT matchid
+                FROM participant_stats
+                WHERE goldearned IS NULL
+                ORDER BY matchid
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            match_ids = [row[0] for row in cursor.fetchall()]
+            print(f"Found {len(match_ids)} matches needing rich-field backfill.")
+            return match_ids
+    except Error as e:
+        print(f"Error selecting matches needing backfill: {e}")
+        return []
     finally:
         connection.close()

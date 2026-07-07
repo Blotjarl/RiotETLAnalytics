@@ -1,17 +1,19 @@
-name: Daily Riot Data ETL
+name: Backfill Rich Participant Fields
 
 on:
-  schedule:
-    # 09:00 UTC daily
-    - cron: '0 9 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      batch_limit:
+        description: 'Max matches to backfill in this run (bounded by Riot rate limit)'
+        required: false
+        default: '8000'
 
 concurrency:
   group: riot-api-etl
   cancel-in-progress: false
 
 jobs:
-  etl:
+  backfill:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     defaults:
@@ -27,9 +29,10 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run ETL pipeline
+      - name: Run backfill
         env:
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKFILL_BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
           PYTHONUNBUFFERED: '1'
-        run: python -m etl.main
+        run: python -m etl.backfill
