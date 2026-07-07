@@ -102,9 +102,15 @@ ALTER TABLE matches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE participant_stats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE champion_stats_by_tier ENABLE ROW LEVEL SECURITY;
 
+-- Postgres has no CREATE POLICY IF NOT EXISTS, so DROP + CREATE is the
+-- standard idiom to keep this file safely re-runnable end to end.
+DROP POLICY IF EXISTS "Public read access" ON players;
 CREATE POLICY "Public read access" ON players FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON matches;
 CREATE POLICY "Public read access" ON matches FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON participant_stats;
 CREATE POLICY "Public read access" ON participant_stats FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON champion_stats_by_tier;
 CREATE POLICY "Public read access" ON champion_stats_by_tier FOR SELECT USING (true);
 -- crawl_state is internal bookkeeping only, intentionally not exposed for public read.
 
@@ -207,7 +213,9 @@ CREATE INDEX IF NOT EXISTS idx_player_lp_history_puuid ON player_lp_history (puu
 ALTER TABLE champion_stats_by_patch ENABLE ROW LEVEL SECURITY;
 ALTER TABLE player_lp_history ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Public read access" ON champion_stats_by_patch;
 CREATE POLICY "Public read access" ON champion_stats_by_patch FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON player_lp_history;
 CREATE POLICY "Public read access" ON player_lp_history FOR SELECT USING (true);
 
 GRANT SELECT ON champion_stats_by_patch, player_lp_history TO anon, authenticated;
