@@ -219,3 +219,84 @@ DROP POLICY IF EXISTS "Public read access" ON player_lp_history;
 CREATE POLICY "Public read access" ON player_lp_history FOR SELECT USING (true);
 
 GRANT SELECT ON champion_stats_by_patch, player_lp_history TO anon, authenticated;
+
+-- ============================================================
+-- Phase 2: frontend-facing views. Plain (not materialized) views on
+-- top of the raw tables -- always fresh, no ETL refresh code to
+-- maintain, and they don't fork the data model that Tableau will
+-- connect to directly later. Views don't inherit RLS/grants from
+-- their underlying tables, so each needs an explicit GRANT; each
+-- also opts into security_invoker (Postgres 15+) so it evaluates
+-- as the querying role rather than the view owner -- a no-op today
+-- since every underlying table here is already public-read, but the
+-- correct default going forward.
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_participant_stats_teamposition ON participant_stats (teamposition);
+
+-- participant_stats is the hot table behind every query above: role-
+-- filtered aggregation (champion_stats_by_role) and per-puuid identity
+-- resolution (player_current_identity) both join/filter through it by
+-- puuid. Without a covering index, each matched row needs a heap fetch,
+-- which is prohibitively slow on a resource-constrained instance at this
+-- table's row count -- confirmed via EXPLAIN ANALYZE: heap-fetching a
+-- ~300-player role query took 4-7s (occasionally exceeding PostgREST's
+-- statement timeout entirely); an index-only scan via this covering
+-- index brought the same query under 500ms. Requires VACUUM ANALYZE
+-- participant_stats for the visibility map to actually let Postgres skip
+-- the heap -- VACUUM cannot run inside a transaction block, so it can't
+-- be included in this script; run it manually, separately, after
+-- applying this file if it hasn't been run recently.
+DROP INDEX IF EXISTS idx_participant_stats_puuid_covering;
+CREATE INDEX idx_participant_stats_puuid_covering
+ON participant_stats (puuid) INCLUDE (matchid, teamposition, championname, win, riotidgamename, riotidtagline);
+
+CREATE OR REPLACE VIEW champion_stats_by_role
+WITH (security_invoker = true) AS
+SELECT
+    ps.teamposition,
+    p.tier,
+    ps.championname,
+    COUNT(*) AS playcount,
+    SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS wincount,
+    ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+FROM participant_stats ps
+JOIN players p ON p.puuid = ps.puuid
+WHERE ps.teamposition IS NOT NULL
+GROUP BY ps.teamposition, p.tier, ps.championname;
+
+GRANT SELECT ON champion_stats_by_role TO anon, authenticated;
+
+-- item0-item5 unnested (item6/trinket intentionally excluded); 0 is
+-- Riot's "empty slot" sentinel, not a real item id, so it's filtered
+-- out alongside NULL.
+CREATE OR REPLACE VIEW item_build_stats
+WITH (security_invoker = true) AS
+SELECT
+    p.tier,
+    ps.championname,
+    items.itemid,
+    COUNT(*) AS playcount,
+    SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS wincount,
+    ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+FROM participant_stats ps
+JOIN players p ON p.puuid = ps.puuid
+CROSS JOIN LATERAL unnest(ARRAY[ps.item0, ps.item1, ps.item2, ps.item3, ps.item4, ps.item5]) AS items(itemid)
+WHERE items.itemid IS NOT NULL AND items.itemid != 0
+GROUP BY p.tier, ps.championname, items.itemid;
+
+GRANT SELECT ON item_build_stats TO anon, authenticated;
+
+-- players has no display-name column at all (only puuid), so this
+-- resolves each puuid's most recently seen Riot ID from match data.
+-- Known limitation: only players whose match history has already
+-- been crawled will resolve to a name (the daily rotation covers the
+-- full player pool over multiple weeks) -- callers must treat a miss
+-- as "name not yet known", not an error.
+CREATE OR REPLACE VIEW player_current_identity
+WITH (security_invoker = true) AS
+SELECT DISTINCT ON (ps.puuid) ps.puuid, ps.riotidgamename, ps.riotidtagline
+FROM participant_stats ps
+JOIN matches m ON m.matchid = ps.matchid
+ORDER BY ps.puuid, m.gamecreation DESC;
+
+GRANT SELECT ON player_current_identity TO anon, authenticated;
