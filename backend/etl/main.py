@@ -25,9 +25,12 @@ PLAYERS_TO_CRAWL_PER_RUN = 500
 MATCHES_PER_PLAYER = 20
 
 # How long to keep match data before it's pruned, to keep the database from
-# growing forever. Lower to 90 if 180 turns out to be too much for the free
-# Supabase storage tier.
-MATCH_RETENTION_DAYS = 180
+# growing forever. Dropped from 180 to 20 on 2026-08-07 after the free-tier
+# Nano instance crashed under disk/CPU exhaustion -- participant_stats had
+# grown to 178k+ rows plus a wide covering index, and a large backfill's
+# worth of row updates left enough bloat that autovacuum couldn't keep up
+# on Nano's limited CPU. Revisit upward only alongside a compute upgrade.
+MATCH_RETENTION_DAYS = 20
 
 
 def run_player_leaderboard_update():
