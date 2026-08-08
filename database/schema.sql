@@ -300,3 +300,113 @@ JOIN matches m ON m.matchid = ps.matchid
 ORDER BY ps.puuid, m.gamecreation DESC;
 
 GRANT SELECT ON player_current_identity TO anon, authenticated;
+
+-- ============================================================
+-- Phase 3: bias-corrected insights. Two distinct statistical biases
+-- in raw win-rate stats: (1) champion matchup selection bias -- a
+-- champion picked deliberately into favorable matchups (e.g. a
+-- counter-pick) has an inflated aggregate win rate that partly
+-- reflects matchup selection, not raw strength; (2) item snowball /
+-- reverse-causation bias -- some items look strong because players
+-- buy them after already snowballing, not because the item caused
+-- the win.
+-- ============================================================
+ALTER TABLE participant_stats
+    ADD COLUMN IF NOT EXISTS firstbloodkill BOOLEAN;
+
+-- Covering index for the lane-opponent self-join below (champion_matchup_stats'
+-- refresh). Neither the PK (matchid, puuid) nor idx_participant_stats_puuid_covering
+-- help here -- both are keyed off puuid, but this join's condition is on
+-- (matchid, teamposition, teamid). Without a dedicated index, each row's lane-
+-- opponent lookup needs a heap fetch per candidate row -- the same pattern that
+-- caused a production incident on champion_stats_by_role earlier. (matchid,
+-- teamposition) as leading key columns makes the opponent lookup an index
+-- condition landing on ~2 rows directly; teamid/championname/win are INCLUDEd
+-- so the scan can be index-only. Run ANALYZE participant_stats after applying
+-- this file (ANALYZE, unlike VACUUM, is safe inside a transaction, but this
+-- script doesn't run it automatically since it only takes effect once real
+-- data exists).
+CREATE INDEX IF NOT EXISTS idx_participant_stats_matchid_teamposition
+ON participant_stats (matchid, teamposition) INCLUDE (teamid, championname, win);
+
+-- champion_matchup_stats / champion_matchup_bias are ETL-refreshed tables
+-- (TRUNCATE + INSERT, like champion_stats_by_tier), NOT plain views, and
+-- deliberately not UPSERTed. Reasoning: the bias-insights page's overview
+-- needs ALL champions in a tier/role at once (the whole point is comparing
+-- selection_effect across champions), unlike every other Phase 2 view which
+-- is always queried pre-filtered to one champion. A live view here would
+-- run the self-join unfiltered on every request, subject to PostgREST's
+-- statement timeout -- structurally the same shape that caused the earlier
+-- incident. Refreshing once/day via the ETL's direct DATABASE_URL connection
+-- (bypassing PostgREST's timeout, same as every other refresh_* job)
+-- sidesteps this entirely. TRUNCATE+INSERT (not UPSERT) avoids the row-
+-- update bloat that compounded the earlier incident. Each table's PK
+-- doubles as the index its own query pattern needs.
+CREATE TABLE IF NOT EXISTS champion_matchup_stats (
+    tier VARCHAR(20) NOT NULL,
+    teamposition VARCHAR(10) NOT NULL,
+    championname VARCHAR(50) NOT NULL,
+    opponent_championname VARCHAR(50) NOT NULL,
+    playcount INT NOT NULL,
+    wincount INT NOT NULL,
+    winrate NUMERIC(5, 2) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tier, teamposition, championname, opponent_championname)
+);
+
+-- observed_winrate: this champion's actual aggregate win rate, naturally
+-- weighted by which opponents were actually faced (skewed by self-selected
+-- matchup picking). expected_winrate: the SAME per-opponent win rates,
+-- reweighted by how common each opponent is OVERALL in that role/tier (from
+-- champion_stats_by_role) rather than by how often this champion specifically
+-- faced them -- i.e. "what win rate would this champion have if matchups
+-- were random instead of chosen." selection_effect = observed - expected is
+-- the quantified matchup-selection bias (standardization/reweighting, the
+-- technique behind opponent-adjusted sports stats).
+CREATE TABLE IF NOT EXISTS champion_matchup_bias (
+    tier VARCHAR(20) NOT NULL,
+    teamposition VARCHAR(10) NOT NULL,
+    championname VARCHAR(50) NOT NULL,
+    games_played INT NOT NULL,
+    observed_winrate NUMERIC(5, 2) NOT NULL,
+    expected_winrate NUMERIC(5, 2) NOT NULL,
+    selection_effect NUMERIC(5, 2) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tier, teamposition, championname)
+);
+
+ALTER TABLE champion_matchup_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE champion_matchup_bias ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public read access" ON champion_matchup_stats;
+CREATE POLICY "Public read access" ON champion_matchup_stats FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON champion_matchup_bias;
+CREATE POLICY "Public read access" ON champion_matchup_bias FOR SELECT USING (true);
+
+GRANT SELECT ON champion_matchup_stats, champion_matchup_bias TO anon, authenticated;
+
+-- Item snowball-bias proxy: item win rates split by whether the buyer got
+-- first blood, as a partial signal for "was already ahead early" vs "bought
+-- it more speculatively". This is a plain view, not a table -- unlike the
+-- matchup-bias pair above, its access pattern is always pre-filtered to one
+-- tier+championname, identical to the already-proven-safe item_build_stats.
+-- Explicitly a PARTIAL proxy, not a causal fix: the fully rigorous version
+-- needs Riot's match-timeline API (game state at the moment of purchase),
+-- which this codebase doesn't fetch.
+CREATE OR REPLACE VIEW item_build_stats_by_firstblood
+WITH (security_invoker = true) AS
+SELECT
+    p.tier,
+    ps.championname,
+    items.itemid,
+    ps.firstbloodkill,
+    COUNT(*) AS playcount,
+    SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS wincount,
+    ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+FROM participant_stats ps
+JOIN players p ON p.puuid = ps.puuid
+CROSS JOIN LATERAL unnest(ARRAY[ps.item0, ps.item1, ps.item2, ps.item3, ps.item4, ps.item5]) AS items(itemid)
+WHERE items.itemid IS NOT NULL AND items.itemid != 0
+GROUP BY p.tier, ps.championname, items.itemid, ps.firstbloodkill;
+
+GRANT SELECT ON item_build_stats_by_firstblood TO anon, authenticated;

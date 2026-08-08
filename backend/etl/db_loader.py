@@ -261,12 +261,12 @@ def load_data_to_db(participant_data_list):
         (matchid, puuid, riotidgamename, riotidtagline, championname, win, kills, deaths, assists,
          teamposition, teamid, item0, item1, item2, item3, item4, item5, item6,
          summoner1id, summoner2id, goldearned, totalminionskilled, visionscore,
-         totaldamagedealttochampions, perks)
+         totaldamagedealttochampions, perks, firstbloodkill)
     VALUES
         (%(matchId)s, %(puuid)s, %(riotIdGameName)s, %(riotIdTagline)s, %(championName)s, %(win)s, %(kills)s, %(deaths)s, %(assists)s,
          %(teamPosition)s, %(teamId)s, %(item0)s, %(item1)s, %(item2)s, %(item3)s, %(item4)s, %(item5)s, %(item6)s,
          %(summoner1Id)s, %(summoner2Id)s, %(goldEarned)s, %(totalMinionsKilled)s, %(visionScore)s,
-         %(totalDamageDealtToChampions)s, %(perks)s)
+         %(totalDamageDealtToChampions)s, %(perks)s, %(firstBloodKill)s)
     ON CONFLICT (matchid, puuid) DO UPDATE SET
         kills = EXCLUDED.kills,
         deaths = EXCLUDED.deaths,
@@ -286,7 +286,8 @@ def load_data_to_db(participant_data_list):
         totalminionskilled = EXCLUDED.totalminionskilled,
         visionscore = EXCLUDED.visionscore,
         totaldamagedealttochampions = EXCLUDED.totaldamagedealttochampions,
-        perks = EXCLUDED.perks;
+        perks = EXCLUDED.perks,
+        firstbloodkill = EXCLUDED.firstbloodkill;
     """
 
     try:
@@ -442,5 +443,113 @@ def get_match_ids_missing_rich_fields(limit=8000):
     except Error as e:
         print(f"Error selecting matches needing backfill: {e}")
         return []
+    finally:
+        connection.close()
+
+
+def refresh_champion_matchup_stats():
+    """
+    Rebuilds champion_matchup_stats (TRUNCATE + INSERT, like
+    champion_stats_by_tier -- not UPSERT, to avoid the row-update bloat
+    that contributed to a past production incident). Self-joins
+    participant_stats to itself on (matchid, teamposition, opposite teamid)
+    to find each participant's lane opponent. Relies on
+    idx_participant_stats_matchid_teamposition (schema.sql) for an index-only
+    scan on the self-join -- without it this degrades into the same
+    heap-fetch-per-row pattern that caused that incident.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    TRUNCATE TABLE champion_matchup_stats;
+    INSERT INTO champion_matchup_stats
+        (tier, teamposition, championname, opponent_championname, playcount, wincount, winrate)
+    SELECT
+        p.tier,
+        ps1.teamposition,
+        ps1.championname,
+        ps2.championname,
+        COUNT(*) AS playcount,
+        SUM(CASE WHEN ps1.win THEN 1 ELSE 0 END) AS wincount,
+        ROUND(100.0 * SUM(CASE WHEN ps1.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+    FROM participant_stats ps1
+    JOIN participant_stats ps2
+      ON ps2.matchid = ps1.matchid
+     AND ps2.teamposition = ps1.teamposition
+     AND ps2.teamid != ps1.teamid
+    JOIN players p ON p.puuid = ps1.puuid
+    WHERE ps1.teamposition IS NOT NULL
+    GROUP BY p.tier, ps1.teamposition, ps1.championname, ps2.championname;
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+            cursor.execute("ANALYZE champion_matchup_stats;")
+        connection.commit()
+        print("Refreshed champion_matchup_stats.")
+    except Error as e:
+        print(f"Error refreshing champion_matchup_stats: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
+def refresh_champion_matchup_bias():
+    """
+    Rebuilds champion_matchup_bias (TRUNCATE + INSERT). Must run AFTER
+    refresh_champion_matchup_stats(), since it reads from that table rather
+    than from raw participant_stats -- running it first would compute bias
+    numbers against stale matchup data.
+
+    observed_winrate: the champion's actual win rate, naturally weighted by
+    which opponents were actually faced (skewed by self-selected matchup
+    picking, e.g. Rammus being preferentially picked into Yi/Irelia).
+    expected_winrate: the same per-opponent win rates reweighted by how
+    common each opponent is OVERALL in that role/tier (champion_stats_by_role),
+    i.e. "what win rate this champion would have if matchups were random
+    instead of chosen" -- standardization/reweighting, the technique behind
+    opponent-adjusted sports stats. Computed from raw wincount/playcount
+    (not the already-rounded winrate column) to avoid compounding rounding
+    error. selection_effect = observed - expected is the quantified bias.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    TRUNCATE TABLE champion_matchup_bias;
+    INSERT INTO champion_matchup_bias
+        (tier, teamposition, championname, games_played, observed_winrate, expected_winrate, selection_effect)
+    SELECT
+        m.tier,
+        m.teamposition,
+        m.championname,
+        SUM(m.playcount) AS games_played,
+        ROUND(100.0 * SUM(m.wincount) / NULLIF(SUM(m.playcount), 0), 2) AS observed_winrate,
+        ROUND(
+            SUM((m.wincount::numeric / NULLIF(m.playcount, 0)) * r.playcount) / NULLIF(SUM(r.playcount), 0) * 100.0,
+        2) AS expected_winrate,
+        ROUND(
+            (100.0 * SUM(m.wincount) / NULLIF(SUM(m.playcount), 0))
+            - (SUM((m.wincount::numeric / NULLIF(m.playcount, 0)) * r.playcount) / NULLIF(SUM(r.playcount), 0) * 100.0),
+        2) AS selection_effect
+    FROM champion_matchup_stats m
+    JOIN champion_stats_by_role r
+      ON r.tier = m.tier AND r.teamposition = m.teamposition AND r.championname = m.opponent_championname
+    GROUP BY m.tier, m.teamposition, m.championname;
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+            cursor.execute("ANALYZE champion_matchup_bias;")
+        connection.commit()
+        print("Refreshed champion_matchup_bias.")
+    except Error as e:
+        print(f"Error refreshing champion_matchup_bias: {e}")
+        connection.rollback()
     finally:
         connection.close()

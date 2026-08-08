@@ -11,6 +11,8 @@ from .db_loader import (
     get_existing_match_ids,
     refresh_champion_stats_by_tier,
     refresh_champion_stats_by_patch,
+    refresh_champion_matchup_stats,
+    refresh_champion_matchup_bias,
     record_lp_history,
     prune_old_matches,
 )
@@ -106,6 +108,11 @@ def run_etl_pipeline():
     prune_old_matches(retention_days=MATCH_RETENTION_DAYS)
     refresh_champion_stats_by_tier()
     refresh_champion_stats_by_patch()
+    # matchup_stats must refresh before matchup_bias -- bias reads from the
+    # matchup_stats table, not raw participant_stats, so running these out of
+    # order would compute bias numbers against stale matchup data.
+    refresh_champion_matchup_stats()
+    refresh_champion_matchup_bias()
 
     print("\n--- Match History ETL Pipeline Finished. ---")
     return True

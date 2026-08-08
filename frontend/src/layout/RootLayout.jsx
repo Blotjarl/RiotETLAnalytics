@@ -1,11 +1,13 @@
 import { NavLink, Outlet, useNavigation } from 'react-router-dom';
 
 const NAV_LINKS = [
-  { to: '/', label: 'Champions', end: true },
+  { to: '/', label: 'Home', end: true },
+  { to: '/champions', label: 'Champions', end: true },
   { to: '/champions/by-role', label: 'By Role' },
   { to: '/meta-trends', label: 'Meta Trends' },
   { to: '/players', label: 'Leaderboard' },
   { to: '/items', label: 'Item Builds' },
+  { to: '/bias-insights', label: 'Bias Insights' },
 ];
 
 function RootLayout() {
