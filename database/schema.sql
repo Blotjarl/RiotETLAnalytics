@@ -393,6 +393,10 @@ GRANT SELECT ON champion_matchup_stats, champion_matchup_bias TO anon, authentic
 -- Explicitly a PARTIAL proxy, not a causal fix: the fully rigorous version
 -- needs Riot's match-timeline API (game state at the moment of purchase),
 -- which this codebase doesn't fetch.
+-- firstbloodkill IS NOT NULL excludes matches crawled before this column
+-- existed (their first-blood status is genuinely unknown, not false) --
+-- without this filter those rows would silently get folded into whichever
+-- bucket a truthy/falsy check in the frontend happened to treat NULL as.
 CREATE OR REPLACE VIEW item_build_stats_by_firstblood
 WITH (security_invoker = true) AS
 SELECT
@@ -406,7 +410,51 @@ SELECT
 FROM participant_stats ps
 JOIN players p ON p.puuid = ps.puuid
 CROSS JOIN LATERAL unnest(ARRAY[ps.item0, ps.item1, ps.item2, ps.item3, ps.item4, ps.item5]) AS items(itemid)
-WHERE items.itemid IS NOT NULL AND items.itemid != 0
+WHERE items.itemid IS NOT NULL AND items.itemid != 0 AND ps.firstbloodkill IS NOT NULL
 GROUP BY p.tier, ps.championname, items.itemid, ps.firstbloodkill;
 
 GRANT SELECT ON item_build_stats_by_firstblood TO anon, authenticated;
+
+-- ============================================================
+-- item_stats_by_tier / item_stats_by_tier_firstblood: item win rates
+-- aggregated across ALL champions, for the "Any Champion" option on the
+-- Item Builds and Bias Insights pages. ETL-refreshed (TRUNCATE + INSERT),
+-- not views -- aggregating across every champion requires scanning and
+-- unnesting the full participant_stats table for a tier, the same
+-- unfiltered-aggregation shape that timed out earlier today when queried
+-- live through PostgREST. Both are small (bounded by ~250 items), so an
+-- unfiltered-by-champion query against these specific tables is cheap.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS item_stats_by_tier (
+    tier VARCHAR(20) NOT NULL,
+    itemid INT NOT NULL,
+    playcount INT NOT NULL,
+    wincount INT NOT NULL,
+    winrate NUMERIC(5, 2) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tier, itemid)
+);
+
+-- firstbloodkill excluded (not just NULLed) for rows where it's unknown --
+-- same reasoning as item_build_stats_by_firstblood above, and NULL can't
+-- participate in a PRIMARY KEY anyway.
+CREATE TABLE IF NOT EXISTS item_stats_by_tier_firstblood (
+    tier VARCHAR(20) NOT NULL,
+    itemid INT NOT NULL,
+    firstbloodkill BOOLEAN NOT NULL,
+    playcount INT NOT NULL,
+    wincount INT NOT NULL,
+    winrate NUMERIC(5, 2) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tier, itemid, firstbloodkill)
+);
+
+ALTER TABLE item_stats_by_tier ENABLE ROW LEVEL SECURITY;
+ALTER TABLE item_stats_by_tier_firstblood ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public read access" ON item_stats_by_tier;
+CREATE POLICY "Public read access" ON item_stats_by_tier FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read access" ON item_stats_by_tier_firstblood;
+CREATE POLICY "Public read access" ON item_stats_by_tier_firstblood FOR SELECT USING (true);
+
+GRANT SELECT ON item_stats_by_tier, item_stats_by_tier_firstblood TO anon, authenticated;

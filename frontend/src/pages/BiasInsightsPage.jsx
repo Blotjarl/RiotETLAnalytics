@@ -57,9 +57,15 @@ export async function loader({ request }) {
           .eq('championname', drillChampion)
           .order('playcount', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
-    itemChampion
-      ? supabase.from('item_build_stats_by_firstblood').select('*').eq('tier', tier).eq('championname', itemChampion)
-      : Promise.resolve({ data: [], error: null }),
+    itemChampion === 'ANY'
+      ? supabase.from('item_stats_by_tier_firstblood').select('*').eq('tier', tier)
+      : itemChampion
+        ? supabase
+            .from('item_build_stats_by_firstblood')
+            .select('*')
+            .eq('tier', tier)
+            .eq('championname', itemChampion)
+        : Promise.resolve({ data: [], error: null }),
   ]);
   if (drillResult.error) throw new Error(drillResult.error.message);
   if (itemResult.error) throw new Error(itemResult.error.message);
@@ -76,14 +82,20 @@ export async function loader({ request }) {
   };
 }
 
-// item_build_stats_by_firstblood has one row per (item, firstbloodkill) pair
-// -- pivot into one row per item with both states side by side, so the gap
-// between them is directly visible instead of split across two lookups.
+// item_build_stats_by_firstblood / item_stats_by_tier_firstblood have one
+// row per (item, firstbloodkill) pair -- pivot into one row per item with
+// both states side by side, so the gap between them is directly visible
+// instead of split across two lookups. Uses explicit === true/false checks
+// (not truthy/falsy) so a null/unknown firstbloodkill is skipped rather
+// than silently folded into the "no first blood" bucket -- shouldn't occur
+// in practice since both source queries already filter firstbloodkill IS
+// NOT NULL, but the check costs nothing and makes the intent explicit.
 function pivotItemStats(rows) {
   const byItem = new Map();
   for (const row of rows) {
+    if (row.firstbloodkill !== true && row.firstbloodkill !== false) continue;
     const entry = byItem.get(row.itemid) ?? { itemid: row.itemid };
-    if (row.firstbloodkill) {
+    if (row.firstbloodkill === true) {
       entry.fbWinrate = row.winrate;
       entry.fbGames = row.playcount;
     } else {
@@ -214,6 +226,52 @@ function BiasInsightsPage() {
           champions with at least {MIN_GAMES_PLAYED} games this role/tier. Click a row to see the
           matchups behind the number.
         </p>
+        <details className="pl-4 mb-4 max-w-3xl text-xs text-gray-500">
+          <summary className="cursor-pointer text-cyan-400 hover:underline w-fit">
+            Show the full methodology
+          </summary>
+          <div className="mt-3 space-y-3 leading-relaxed">
+            <p>
+              For a champion C, in a given role and tier, against every opponent they've faced:
+            </p>
+            <pre className="bg-gray-800 rounded p-3 overflow-x-auto text-gray-300">
+{`observed_winrate(C) = Σ [ N(C,O) × WR(C,O) ] / Σ N(C,O)
+expected_winrate(C) = Σ [ P(O)   × WR(C,O) ] / Σ P(O)
+
+selection_effect(C) = observed_winrate(C) − expected_winrate(C)`}
+            </pre>
+            <p>
+              where, for each opponent O: <strong className="text-gray-400">WR(C,O)</strong> is C's win
+              rate specifically against O, <strong className="text-gray-400">N(C,O)</strong> is how many
+              times C actually faced O, and <strong className="text-gray-400">P(O)</strong> is O's overall
+              play rate in this role/tier &mdash; independent of who they're facing.
+            </p>
+            <p>
+              <code className="text-gray-300">observed_winrate</code> is just the number everyone already
+              reports &mdash; wins over games. Because players choose their matchups, it's implicitly
+              weighted by N(C,O): how often C's players actually sought out (or avoided) each opponent.{' '}
+              <code className="text-gray-300">expected_winrate</code> recomputes the same average, but
+              swaps that self-selected weighting for P(O) &mdash; how common each opponent naturally is in
+              this role/tier, regardless of who's playing C. In other words: what would C's win rate look
+              like if matchups were assigned at random instead of chosen.
+            </p>
+            <p>
+              This is <strong className="text-gray-400">direct standardization</strong> (also called
+              reweighting) &mdash; the same technique epidemiologists use to compare disease rates across
+              populations with different age distributions, and the same idea behind opponent-adjusted or
+              strength-of-schedule-adjusted stats in sports analytics. The general principle: don't compare
+              two raw averages when the underlying exposure &mdash; here, which opponents were faced &mdash;
+              differs between them. Reweight both to a shared, neutral distribution first, then compare.
+            </p>
+            <p>
+              A <strong className="text-green-400">positive</strong> selection_effect means the champion's
+              raw win rate is inflated by being picked into favorable matchups more often than the
+              population would predict. A <strong className="text-red-400">negative</strong> selection_effect
+              means the opposite: raw stats understate the champion, because they're disproportionately
+              played into unfavorable matchups &mdash; possibly by players who don't realize it.
+            </p>
+          </div>
+        </details>
         <DataTable
           columns={biasColumns}
           data={matchupBias}
@@ -243,7 +301,7 @@ function BiasInsightsPage() {
             <FilterSelect
               paramName="itemChampion"
               defaultValue={itemChampion}
-              options={champions.map((c) => ({ value: c, label: c }))}
+              options={[{ value: 'ANY', label: 'Any Champion' }, ...champions.map((c) => ({ value: c, label: c }))]}
             />
           </div>
         </div>

@@ -23,9 +23,20 @@ export async function loader({ request }) {
   // item_build_stats is filtered to a single champion+tier here, so the
   // result set is naturally bounded (at most one row per distinct item the
   // game has ever had) -- no pagination/exact-count needed, unlike a
-  // hypothetical unfiltered query against this view.
+  // hypothetical unfiltered query against this view. "Any Champion" reads
+  // from item_stats_by_tier instead -- an ETL-refreshed table, not a live
+  // aggregation, since scanning every champion's items in one query is the
+  // unfiltered-aggregation shape that isn't safe to run through PostgREST.
   let items = [];
-  if (champion) {
+  if (champion === 'ANY') {
+    const { data, error } = await supabase
+      .from('item_stats_by_tier')
+      .select('*')
+      .eq('tier', tier)
+      .order('playcount', { ascending: false });
+    if (error) throw new Error(error.message);
+    items = data ?? [];
+  } else if (champion) {
     const { data, error } = await supabase
       .from('item_build_stats')
       .select('*')
@@ -61,7 +72,7 @@ function ItemBuildsPage() {
           <FilterSelect
             paramName="champion"
             defaultValue={champion}
-            options={champions.map((c) => ({ value: c, label: c }))}
+            options={[{ value: 'ANY', label: 'Any Champion' }, ...champions.map((c) => ({ value: c, label: c }))]}
           />
           <FilterSelect paramName="tier" defaultValue={tier} options={TIERS.map((t) => ({ value: t, label: t }))} />
         </div>

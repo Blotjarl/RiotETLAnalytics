@@ -13,6 +13,8 @@ from .db_loader import (
     refresh_champion_stats_by_patch,
     refresh_champion_matchup_stats,
     refresh_champion_matchup_bias,
+    refresh_item_stats_by_tier,
+    refresh_item_stats_by_tier_firstblood,
     record_lp_history,
     prune_old_matches,
 )
@@ -113,6 +115,8 @@ def run_etl_pipeline():
     # order would compute bias numbers against stale matchup data.
     refresh_champion_matchup_stats()
     refresh_champion_matchup_bias()
+    refresh_item_stats_by_tier()
+    refresh_item_stats_by_tier_firstblood()
 
     print("\n--- Match History ETL Pipeline Finished. ---")
     return True

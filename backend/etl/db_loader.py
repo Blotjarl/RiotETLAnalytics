@@ -553,3 +553,90 @@ def refresh_champion_matchup_bias():
         connection.rollback()
     finally:
         connection.close()
+
+
+def refresh_item_stats_by_tier():
+    """
+    Rebuilds item_stats_by_tier (TRUNCATE + INSERT). Item win rates
+    aggregated across ALL champions per tier -- powers the "Any Champion"
+    option on the Item Builds page. ETL-refreshed rather than a live view
+    for the same reason as champion_matchup_stats: aggregating across every
+    champion means scanning/unnesting the full participant_stats table for
+    a tier, an unfiltered-aggregation shape that isn't safe to run live
+    through PostgREST.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    TRUNCATE TABLE item_stats_by_tier;
+    INSERT INTO item_stats_by_tier (tier, itemid, playcount, wincount, winrate)
+    SELECT
+        p.tier,
+        items.itemid,
+        COUNT(*) AS playcount,
+        SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS wincount,
+        ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+    FROM participant_stats ps
+    JOIN players p ON p.puuid = ps.puuid
+    CROSS JOIN LATERAL unnest(ARRAY[ps.item0, ps.item1, ps.item2, ps.item3, ps.item4, ps.item5]) AS items(itemid)
+    WHERE items.itemid IS NOT NULL AND items.itemid != 0
+    GROUP BY p.tier, items.itemid;
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+            cursor.execute("ANALYZE item_stats_by_tier;")
+        connection.commit()
+        print("Refreshed item_stats_by_tier.")
+    except Error as e:
+        print(f"Error refreshing item_stats_by_tier: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
+
+
+def refresh_item_stats_by_tier_firstblood():
+    """
+    Rebuilds item_stats_by_tier_firstblood (TRUNCATE + INSERT). Same as
+    refresh_item_stats_by_tier but split by firstbloodkill, for the "Any
+    Champion" option on the Bias Insights item-snowball section. Rows where
+    firstbloodkill hasn't been captured yet (NULL -- matches crawled before
+    this column existed) are excluded rather than folded into the "no
+    first blood" bucket, since they're unknown, not false -- also required
+    since firstbloodkill is NOT NULL in this table's primary key.
+    """
+    connection = get_db_connection()
+    if not connection:
+        return
+
+    sql = """
+    TRUNCATE TABLE item_stats_by_tier_firstblood;
+    INSERT INTO item_stats_by_tier_firstblood (tier, itemid, firstbloodkill, playcount, wincount, winrate)
+    SELECT
+        p.tier,
+        items.itemid,
+        ps.firstbloodkill,
+        COUNT(*) AS playcount,
+        SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) AS wincount,
+        ROUND(100.0 * SUM(CASE WHEN ps.win THEN 1 ELSE 0 END) / COUNT(*), 2) AS winrate
+    FROM participant_stats ps
+    JOIN players p ON p.puuid = ps.puuid
+    CROSS JOIN LATERAL unnest(ARRAY[ps.item0, ps.item1, ps.item2, ps.item3, ps.item4, ps.item5]) AS items(itemid)
+    WHERE items.itemid IS NOT NULL AND items.itemid != 0 AND ps.firstbloodkill IS NOT NULL
+    GROUP BY p.tier, items.itemid, ps.firstbloodkill;
+    """
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql)
+            cursor.execute("ANALYZE item_stats_by_tier_firstblood;")
+        connection.commit()
+        print("Refreshed item_stats_by_tier_firstblood.")
+    except Error as e:
+        print(f"Error refreshing item_stats_by_tier_firstblood: {e}")
+        connection.rollback()
+    finally:
+        connection.close()
