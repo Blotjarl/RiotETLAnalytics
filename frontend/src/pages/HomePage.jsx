@@ -40,14 +40,15 @@ function HomePage() {
         <h2 className="text-3xl font-bold mb-3">Rift Insights</h2>
         <p className="text-gray-300 leading-relaxed">
           An analytics platform for League of Legends' Challenger, Grandmaster, and Master tiers.
-          A daily pipeline pulls ranked match data directly from Riot's API, loads it into Postgres,
-          and this site reads it live &mdash; no manually-curated stats, no scraping other sites.
+          A daily pipeline pulls ranked match data directly from Riot's API and loads it into
+          Postgres, and this site reads that data live. Nothing here is hand-curated or scraped
+          from other stats sites.
         </p>
         <p className="text-gray-400 leading-relaxed mt-3 text-sm">
-          Most of what you'll find here is the usual: win rates, item builds, meta trends over
-          patches. The <Link to="/bias-insights" className="text-cyan-400 hover:underline">Bias Insights</Link> page
-          is the odd one out &mdash; it's a deliberate look at where those raw win-rate numbers are
-          statistically misleading, and what a corrected version of them looks like.
+          Most of what you'll find here is the usual stuff: win rates, item builds, meta trends
+          over patches. The <Link to="/bias-insights" className="text-cyan-400 hover:underline">Bias Insights</Link> page
+          is the exception. It takes a close look at where those raw win-rate numbers are actually
+          misleading, and shows what a corrected version looks like.
         </p>
       </div>
 

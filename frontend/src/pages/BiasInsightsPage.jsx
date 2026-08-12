@@ -108,7 +108,7 @@ function pivotItemStats(rows) {
 }
 
 function signedPercent(value) {
-  if (value == null) return '—';
+  if (value == null) return 'N/A';
   const rounded = Math.round(value * 10) / 10;
   const color = rounded > 0 ? 'text-green-400' : rounded < 0 ? 'text-red-400' : 'text-gray-400';
   return <span className={color}>{rounded > 0 ? '+' : ''}{rounded}%</span>;
@@ -157,14 +157,14 @@ const itemColumns = [
     header: 'First Blood WR',
     accessorFn: (row) => row.fbWinrate ?? null,
     cell: ({ row }) =>
-      row.original.fbWinrate != null ? `${row.original.fbWinrate}% (${row.original.fbGames})` : '—',
+      row.original.fbWinrate != null ? `${row.original.fbWinrate}% (${row.original.fbGames})` : 'N/A',
   },
   {
     id: 'noFirstBlood',
     header: 'No First Blood WR',
     accessorFn: (row) => row.noFbWinrate ?? null,
     cell: ({ row }) =>
-      row.original.noFbWinrate != null ? `${row.original.noFbWinrate}% (${row.original.noFbGames})` : '—',
+      row.original.noFbWinrate != null ? `${row.original.noFbWinrate}% (${row.original.noFbGames})` : 'N/A',
   },
   {
     id: 'gap',
@@ -219,12 +219,13 @@ function BiasInsightsPage() {
           <strong className="text-gray-400">Observed win rate</strong> is a champion's actual win rate,
           weighted by the opponents players actually chose to face them with. <strong className="text-gray-400">Expected
           win rate</strong> reweights those same per-opponent win rates by how common each opponent is
-          overall in this role/tier &mdash; i.e. what the champion's win rate would be if matchups were
-          random instead of chosen. The gap (<strong className="text-gray-400">selection effect</strong>) is
-          the win rate explained by favorable matchup selection rather than raw strength &mdash; the same
-          standardization technique behind opponent-adjusted stats in sports analytics. Only shown for
-          champions with at least {MIN_GAMES_PLAYED} games this role/tier. Click a row to see the
-          matchups behind the number.
+          overall in this role and tier, so it shows what the champion's win rate would look like if
+          matchups were random instead of chosen. The gap between them
+          (<strong className="text-gray-400">selection effect</strong>) is how much of the win rate comes
+          from favorable matchup selection rather than raw strength. It's the same standardization
+          technique used for opponent-adjusted stats in sports analytics. Only champions with at least
+          {' '}{MIN_GAMES_PLAYED} games in this role and tier are shown. Click a row to see the matchups
+          behind the number.
         </p>
         <details className="pl-4 mb-4 max-w-3xl text-xs text-gray-500">
           <summary className="cursor-pointer text-cyan-400 hover:underline w-fit">
@@ -244,31 +245,31 @@ selection_effect(C) = observed_winrate(C) − expected_winrate(C)`}
               where, for each opponent O: <strong className="text-gray-400">WR(C,O)</strong> is C's win
               rate specifically against O, <strong className="text-gray-400">N(C,O)</strong> is how many
               times C actually faced O, and <strong className="text-gray-400">P(O)</strong> is O's overall
-              play rate in this role/tier &mdash; independent of who they're facing.
+              play rate in this role and tier, regardless of who they're facing.
             </p>
             <p>
               <code className="text-gray-300">observed_winrate</code> is just the number everyone already
-              reports &mdash; wins over games. Because players choose their matchups, it's implicitly
-              weighted by N(C,O): how often C's players actually sought out (or avoided) each opponent.{' '}
+              reports: wins over games. Because players choose their matchups, it's implicitly weighted by
+              N(C,O), how often C's players actually sought out or avoided each opponent.{' '}
               <code className="text-gray-300">expected_winrate</code> recomputes the same average, but
-              swaps that self-selected weighting for P(O) &mdash; how common each opponent naturally is in
-              this role/tier, regardless of who's playing C. In other words: what would C's win rate look
-              like if matchups were assigned at random instead of chosen.
+              swaps that self-selected weighting for P(O), how common each opponent naturally is in this
+              role and tier, regardless of who's playing C. That answers a different question: what would
+              C's win rate look like if matchups were assigned at random instead of chosen?
             </p>
             <p>
-              This is <strong className="text-gray-400">direct standardization</strong> (also called
-              reweighting) &mdash; the same technique epidemiologists use to compare disease rates across
-              populations with different age distributions, and the same idea behind opponent-adjusted or
-              strength-of-schedule-adjusted stats in sports analytics. The general principle: don't compare
-              two raw averages when the underlying exposure &mdash; here, which opponents were faced &mdash;
-              differs between them. Reweight both to a shared, neutral distribution first, then compare.
+              This is called <strong className="text-gray-400">direct standardization</strong>, or
+              reweighting. Epidemiologists use the same technique to compare disease rates across
+              populations with different age distributions, and it's the same idea behind opponent-adjusted
+              or strength-of-schedule-adjusted stats in sports analytics. The principle is simple: don't
+              compare two raw averages when the underlying exposure differs between them (here, which
+              opponents were faced). Reweight both to a shared, neutral distribution first, then compare.
             </p>
             <p>
               A <strong className="text-green-400">positive</strong> selection_effect means the champion's
-              raw win rate is inflated by being picked into favorable matchups more often than the
+              raw win rate is inflated because they're picked into favorable matchups more often than the
               population would predict. A <strong className="text-red-400">negative</strong> selection_effect
-              means the opposite: raw stats understate the champion, because they're disproportionately
-              played into unfavorable matchups &mdash; possibly by players who don't realize it.
+              means the opposite: raw stats understate the champion because they're disproportionately
+              played into unfavorable matchups, possibly by players who don't realize it.
             </p>
           </div>
         </details>
@@ -282,7 +283,7 @@ selection_effect(C) = observed_winrate(C) − expected_winrate(C)`}
         {drillChampion && (
           <div className="mt-6">
             <h4 className="text-lg font-semibold mb-2">
-              {drillChampion} &mdash; per-opponent breakdown
+              {drillChampion}: per-opponent breakdown
             </h4>
             <DataTable
               columns={matchupDetailColumns}
@@ -306,12 +307,12 @@ selection_effect(C) = observed_winrate(C) − expected_winrate(C)`}
           </div>
         </div>
         <p className="text-xs text-gray-500 pl-4 mb-4 max-w-3xl">
-          Some items look strong mainly because players buy them after they're already ahead &mdash; the
-          item is a symptom of winning, not the cause. <strong className="text-gray-400">First blood</strong> is
-          used here as a rough, partial signal for "was already ahead early." This is not a full fix: the
-          rigorous version needs game state at the exact moment of purchase (Riot's match-timeline API,
-          which this site doesn't currently fetch) rather than a single early-game proxy &mdash; treat a
-          large first-blood/no-first-blood gap as a hint worth investigating, not a proven causal effect.
+          Some items look strong mainly because players buy them after they're already ahead. The item is
+          a symptom of winning, not the cause. <strong className="text-gray-400">First blood</strong> is
+          used here as a rough, partial signal for "was already ahead early." This isn't a full fix. The
+          rigorous version would need game state at the exact moment of purchase (Riot's match-timeline
+          API, which this site doesn't currently fetch), not just a single early-game proxy. Treat a large
+          first-blood/no-first-blood gap as a hint worth investigating, not as proof of a causal effect.
         </p>
         <DataTable columns={itemColumns} data={itemStats} emptyMessage="No item data for this champion yet." />
       </section>
