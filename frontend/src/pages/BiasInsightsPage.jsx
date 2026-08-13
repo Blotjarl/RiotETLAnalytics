@@ -190,9 +190,8 @@ function BiasInsightsPage() {
       <div className="max-w-3xl mb-8">
         <h2 className="text-2xl font-semibold mb-2">Bias Insights</h2>
         <p className="text-sm text-gray-400 leading-relaxed">
-          Raw win-rate stats are misleading in specific, well-understood ways. The two sections below
-          quantify two of them: champions picked deliberately into favorable matchups, and items bought
-          after a player is already winning.
+          Raw win-rate stats can be misleading. These two sections show two common ways: champions
+          picked into favorable matchups, and items bought after a player is already winning.
         </p>
       </div>
 
@@ -216,16 +215,12 @@ function BiasInsightsPage() {
           </div>
         </div>
         <p className="text-xs text-gray-500 pl-4 mb-4 max-w-3xl">
-          <strong className="text-gray-400">Observed win rate</strong> is a champion's actual win rate,
-          weighted by the opponents players actually chose to face them with. <strong className="text-gray-400">Expected
-          win rate</strong> reweights those same per-opponent win rates by how common each opponent is
-          overall in this role and tier, so it shows what the champion's win rate would look like if
-          matchups were random instead of chosen. The gap between them
-          (<strong className="text-gray-400">selection effect</strong>) is how much of the win rate comes
-          from favorable matchup selection rather than raw strength. It's the same standardization
-          technique used for opponent-adjusted stats in sports analytics. Only champions with at least
-          {' '}{MIN_GAMES_PLAYED} games in this role and tier are shown. Click a row to see the matchups
-          behind the number.
+          <strong className="text-gray-400">Observed win rate</strong> is the real number, based on the
+          matchups players actually picked. <strong className="text-gray-400">Expected win rate</strong> reweights
+          it to how common each opponent normally is, showing what the win rate would be if matchups
+          were random. The gap (<strong className="text-gray-400">selection effect</strong>) is how much
+          comes from picking good matchups, not raw strength. Minimum {MIN_GAMES_PLAYED} games. Click a
+          row for the breakdown.
         </p>
         <details className="pl-4 mb-4 max-w-3xl text-xs text-gray-500">
           <summary className="cursor-pointer text-cyan-400 hover:underline w-fit">
@@ -307,12 +302,10 @@ selection_effect(C) = observed_winrate(C) − expected_winrate(C)`}
           </div>
         </div>
         <p className="text-xs text-gray-500 pl-4 mb-4 max-w-3xl">
-          Some items look strong mainly because players buy them after they're already ahead. The item is
-          a symptom of winning, not the cause. <strong className="text-gray-400">First blood</strong> is
-          used here as a rough, partial signal for "was already ahead early." This isn't a full fix. The
-          rigorous version would need game state at the exact moment of purchase (Riot's match-timeline
-          API, which this site doesn't currently fetch), not just a single early-game proxy. Treat a large
-          first-blood/no-first-blood gap as a hint worth investigating, not as proof of a causal effect.
+          Some items look strong mainly because players buy them after they're already ahead. The item
+          is a symptom of winning, not the cause. <strong className="text-gray-400">First blood</strong> is
+          a rough stand-in for "already ahead early." It's a partial fix, not proof. A real causal read
+          needs the game state at the moment of purchase, data this site doesn't collect.
         </p>
         <DataTable columns={itemColumns} data={itemStats} emptyMessage="No item data for this champion yet." />
       </section>
