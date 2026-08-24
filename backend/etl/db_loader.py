@@ -1,7 +1,6 @@
 import os
 import psycopg2
 from psycopg2 import Error
-from psycopg2.extras import Json
 
 
 def get_db_connection():
@@ -261,12 +260,12 @@ def load_data_to_db(participant_data_list):
         (matchid, puuid, riotidgamename, riotidtagline, championname, win, kills, deaths, assists,
          teamposition, teamid, item0, item1, item2, item3, item4, item5, item6,
          summoner1id, summoner2id, goldearned, totalminionskilled, visionscore,
-         totaldamagedealttochampions, perks, firstbloodkill)
+         totaldamagedealttochampions, firstbloodkill)
     VALUES
         (%(matchId)s, %(puuid)s, %(riotIdGameName)s, %(riotIdTagline)s, %(championName)s, %(win)s, %(kills)s, %(deaths)s, %(assists)s,
          %(teamPosition)s, %(teamId)s, %(item0)s, %(item1)s, %(item2)s, %(item3)s, %(item4)s, %(item5)s, %(item6)s,
          %(summoner1Id)s, %(summoner2Id)s, %(goldEarned)s, %(totalMinionsKilled)s, %(visionScore)s,
-         %(totalDamageDealtToChampions)s, %(perks)s, %(firstBloodKill)s)
+         %(totalDamageDealtToChampions)s, %(firstBloodKill)s)
     ON CONFLICT (matchid, puuid) DO UPDATE SET
         kills = EXCLUDED.kills,
         deaths = EXCLUDED.deaths,
@@ -286,19 +285,12 @@ def load_data_to_db(participant_data_list):
         totalminionskilled = EXCLUDED.totalminionskilled,
         visionscore = EXCLUDED.visionscore,
         totaldamagedealttochampions = EXCLUDED.totaldamagedealttochampions,
-        perks = EXCLUDED.perks,
         firstbloodkill = EXCLUDED.firstbloodkill;
     """
 
     try:
         with connection.cursor() as cursor:
-            # perks is a nested dict; psycopg2 needs it wrapped as Json to
-            # adapt correctly into a JSONB column.
-            rows = [
-                {**row, "perks": Json(row["perks"]) if row.get("perks") is not None else None}
-                for row in participant_data_list
-            ]
-            cursor.executemany(sql, rows)
+            cursor.executemany(sql, participant_data_list)
         connection.commit()
         print(f"Successfully loaded or updated {len(participant_data_list)} participant stats records.")
         return True
@@ -453,10 +445,12 @@ def refresh_champion_matchup_stats():
     champion_stats_by_tier -- not UPSERT, to avoid the row-update bloat
     that contributed to a past production incident). Self-joins
     participant_stats to itself on (matchid, teamposition, opposite teamid)
-    to find each participant's lane opponent. Relies on
-    idx_participant_stats_matchid_teamposition (schema.sql) for an index-only
-    scan on the self-join -- without it this degrades into the same
-    heap-fetch-per-row pattern that caused that incident.
+    to find each participant's lane opponent. Uses
+    idx_participant_stats_matchid_teamposition (schema.sql) to drive the
+    join -- a plain (non-covering) index, since this only runs once a day
+    from here, over a direct connection with a large timeout budget, not
+    from live PostgREST traffic, so it doesn't need to guarantee an
+    index-only scan the way a live, user-facing query would.
     """
     connection = get_db_connection()
     if not connection:

@@ -458,3 +458,34 @@ DROP POLICY IF EXISTS "Public read access" ON item_stats_by_tier_firstblood;
 CREATE POLICY "Public read access" ON item_stats_by_tier_firstblood FOR SELECT USING (true);
 
 GRANT SELECT ON item_stats_by_tier, item_stats_by_tier_firstblood TO anon, authenticated;
+
+-- ============================================================
+-- Phase 4: reduce participant_stats' on-disk footprint. This table alone
+-- was ~86% of the whole database's size (1023 MB of 1.19 GB), which put
+-- the project over the free tier's 0.5 GB storage quota.
+--
+-- 1. perks (raw runes JSONB) has never had a single consumer -- the
+--    runes-insights feature it was reserved for was never built -- and a
+--    JSONB blob on every participant row is exactly the kind of column
+--    that bloats a table far more than its column count suggests.
+--    Dropping it is fully reversible: if a runes feature gets built later,
+--    just re-add the column and it starts populating again from that
+--    point forward, same as how firstbloodkill was introduced.
+-- 2. idx_participant_stats_matchid_teamposition was over-built as a wide
+--    covering index. It only supports champion_matchup_stats' self-join,
+--    which runs once a day from the ETL job over a direct connection with
+--    a 240-minute budget, not from live PostgREST traffic -- it never
+--    needed to guarantee an index-only scan the way a live, user-facing
+--    query does. A plain index is enough for a background batch job.
+--
+-- Dropping the column and narrowing the index only stops FUTURE growth
+-- and changes metadata immediately; the space already on disk needs a
+-- manual VACUUM (FULL, ANALYZE) participant_stats afterward to actually
+-- be reclaimed (VACUUM can't run inside this script's transaction, same
+-- restriction as always -- run it separately).
+-- ============================================================
+ALTER TABLE participant_stats DROP COLUMN IF EXISTS perks;
+
+DROP INDEX IF EXISTS idx_participant_stats_matchid_teamposition;
+CREATE INDEX idx_participant_stats_matchid_teamposition
+ON participant_stats (matchid, teamposition);

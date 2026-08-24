@@ -67,7 +67,6 @@ def transform_raw_match_data(raw_match_data_list):
                 "totalMinionsKilled": p_data.get("totalMinionsKilled"),
                 "visionScore": p_data.get("visionScore"),
                 "totalDamageDealtToChampions": p_data.get("totalDamageDealtToChampions"),
-                "perks": p_data.get("perks"),
                 "firstBloodKill": p_data.get("firstBloodKill", False),
             })
 
